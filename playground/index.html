@@ -1,32 +1,44 @@
-<!doctype html>
-<html ng-app="playground">
-  <head>
-    <title>GopherJS Playground</title>
-		<link rel="stylesheet" type="text/css" href="playground.css">
-    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.2.18/angular.min.js"></script>
-    <script src="playground.js"></script>
-  </head>
-  <body ng-controller="PlaygroundCtrl">
-    <div id="banner">
-      <span id="head">playground <small>(GopherJS {{version}})</small></span>
-      <span id="controls">
-        <input type="button" value="Run" ng-click="run(false)" />
-        <input type="button" value="Format" ng-click="format()" />
-        <label title="Rewrite imports on Format">
-          <input ng-model="imports" type="checkbox" />Imports
-        </label>
-        <input type="button" value="Share" ng-click="share()" />
-        <input type="text" class="show-share-url-{{showShareUrl}}" id="share-url" value="{{shareUrl}}" onfocus="select()" />
-      </span>
-    </div>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Go Playground</title>
+    <script src="main.js"></script>
+    <style>
+        #code {
+            width: 100%;
+            height: 300px;
+        }
+        #output {
+            width: 100%;
+            height: 300px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Go Playground</h1>
 
-		<div class="box" id="content">
-      <div class="box yellow" id="input">
-        <textarea ng-model="code" id="code" autocorrect="off" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
-      </div>
-    </div>
-    <div class="box" id="output">
-      <pre ng-repeat="line in output" class="{{line.type}}">{{line.content}}&nbsp;</pre>
-    </div>
-  </body>
+<textarea id="code">
+package main
+
+import (
+    "syscall/js"
+)
+
+func main() {
+    js.Global().Call("alert", "Hello, JavaScript")
+    js.Global().Get("console").Call("log", "Hello, JS console")
+}
+        </textarea>
+    
+    <button onclick="run()">Run</button>
+    <pre id="output"></pre>
+
+    <script>
+        function run() {
+            var code = document.getElementById('code').value;
+            var output = runCode(code);
+            document.getElementById('output').textContent = JSON.stringify(output, null, 2);
+        }
+    </script>
+</body>
 </html>
