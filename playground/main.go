@@ -9,12 +9,13 @@ import (
 	"go/scanner"
 	"go/token"
 	"go/types"
+	"io/ioutil"
+	"net/http"
 	"runtime"
 	"strings"
 
 	"github.com/gopherjs/gopherjs/compiler"
 	"github.com/gopherjs/gopherjs/js"
-	"honnef.co/go/js/xhr"
 )
 
 type Line map[string]string
@@ -34,8 +35,38 @@ func main() {
 			if pkg, found := packages[path]; found {
 				return pkg, nil
 			}
-			pkgsToLoad[path] = struct{}{}
-			return &compiler.Archive{}, nil
+
+			var respData []byte
+			var err error
+
+			resp, err := http.Get("https://cdn.jsdelivr.net/gh/naorzr/gopherjs-runtime@master/playground/pkg/" + path + ".a.js")
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+
+			respData, err = ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return nil, err
+			}
+
+			if err != nil {
+				return nil, err
+			}
+
+			pkg, err := compiler.ReadArchive(path+".a", bytes.NewReader(respData))
+			if err != nil {
+				// Handle error
+				return nil, err
+			}
+			packages[path] = pkg
+
+			if err := pkg.RegisterTypes(importContext.Packages); err != nil {
+				js.Global.Call("eval", js.InternalObject("console.error('error registering types package: "+path+"')"))
+				return nil, err
+			}
+
+			return pkg, nil
 		},
 	}
 	fileSet = token.NewFileSet()
@@ -43,6 +74,23 @@ func main() {
 
 	setupEnvironment()
 	js.Global.Set("runCode", js.MakeFunc(runCode))
+	js.Global.Set("runCodeAsync", js.MakeFunc(runCodeAsync))
+
+}
+
+func runCodeAsync(this *js.Object, arguments []*js.Object) interface{} {
+	resultChan := make(chan interface{})
+
+	go func() {
+		// Original runCode content
+		result := runCode(this, arguments)
+
+		resultChan <- result
+		close(resultChan)
+	}()
+
+	// Block until the goroutine sends the result, then return it
+	return <-resultChan
 }
 
 func runCode(this *js.Object, arguments []*js.Object) interface{} {
@@ -52,81 +100,35 @@ func runCode(this *js.Object, arguments []*js.Object) interface{} {
 		fmt.Println("Error during marshalling:", err)
 		return nil
 	}
+
 	// log code
 	js.Global.Call("eval", js.InternalObject("console.log('code: "+string(escaped)+"')"))
-	output = nil
-	pkgsToLoad = make(map[string]struct{})
 
 	file, err := parser.ParseFile(fileSet, "prog.go", []byte(code), parser.ParseComments)
 	if err != nil {
 		if list, ok := err.(scanner.ErrorList); ok {
+			var outputErr []Line
 			for _, entry := range list {
-				output = append(output, Line{"type": "err", "content": entry.Error()})
+				outputErr = append(outputErr, Line{"type": "err", "content": entry.Error()})
 			}
-			return output
+			return outputErr
 		}
 		return err.Error()
 	}
 
 	mainPkg, err := compiler.Compile("main", []*ast.File{file}, fileSet, importContext, false)
-	packages["main"] = mainPkg
-	if err != nil && len(pkgsToLoad) == 0 {
+	if err != nil {
 		if list, ok := err.(compiler.ErrorList); ok {
-			var output []Line
+			var outputErr []Line
 			for _, entry := range list {
-				output = append(output, Line{"type": "err", "content": entry.Error()})
+				outputErr = append(outputErr, Line{"type": "err", "content": entry.Error()})
 			}
-			return output
+			return outputErr
 		}
 		return err.Error()
 	}
 
-	var allPkgs []*compiler.Archive
-	if len(pkgsToLoad) == 0 {
-		allPkgs, _ = compiler.ImportDependencies(mainPkg, importContext.Import)
-	}
-
-	if len(pkgsToLoad) != 0 {
-		pkgsReceived = 0
-		for path := range pkgsToLoad {
-			req := xhr.NewRequest("GET", "https://cdn.jsdelivr.net/gh/naorzr/gopherjs-runtime@master/playground/pkg/"+path+".a.js")
-			req.ResponseType = xhr.ArrayBuffer
-			go func(path string) {
-				err := req.Send(nil)
-				if err != nil || req.Status != 200 {
-					// log error
-					js.Global.Call("eval", js.InternalObject("console.error('error loading package: "+path+"')"))
-					return
-				}
-
-				data := js.Global.Get("Uint8Array").New(req.Response).Interface().([]byte)
-				packages[path], err = compiler.ReadArchive(path+".a", bytes.NewReader(data))
-				if err != nil {
-					// log error
-					js.Global.Call("eval", js.InternalObject("console.error('error reading archive package: "+path+"')"))
-					return
-				}
-				if err := packages[path].RegisterTypes(importContext.Packages); err != nil {
-					// log error
-					js.Global.Call("eval", js.InternalObject("console.error('error registering types package: "+path+"')"))
-					return
-				}
-				pkgsReceived++
-				if pkgsReceived == len(pkgsToLoad) {
-					// log pkgsToLoad
-					pkgsToLoadStr := ""
-					for path := range pkgsToLoad {
-						pkgsToLoadStr += path + ", "
-					}
-					js.Global.Call("eval", js.InternalObject("console.log('packages loaded:  "+pkgsToLoadStr+"')"))
-					// log pkgsReceived
-					js.Global.Call("eval", js.InternalObject("console.log('pkgsReceived:  "+fmt.Sprintf("%d", pkgsReceived)+"')"))
-					// log code
-					runCode(nil, arguments)
-				}
-			}(path)
-		}
-	}
+	allPkgs, _ := compiler.ImportDependencies(mainPkg, importContext.Import)
 
 	jsCode := bytes.NewBuffer(nil)
 	jsCode.WriteString("try{\n")
@@ -137,6 +139,7 @@ func runCode(this *js.Object, arguments []*js.Object) interface{} {
 
 	return jsCode.String()
 }
+
 func setupEnvironment() {
 	js.Global.Set("goPrintToConsole", js.InternalObject(func(b []byte) {
 		lines := strings.Split(string(b), "\n")

@@ -36,7 +36,7 @@ func main() {
     <script>
         function run() {
             var code = document.getElementById('code').value;
-            var output = runCode(code);
+            var output = runCodeAsync(code);
             document.getElementById('output').textContent = JSON.stringify(output, null, 2);
         }
     </script>
